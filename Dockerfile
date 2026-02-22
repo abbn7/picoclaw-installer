@@ -9,7 +9,7 @@
 # ║  TELEGRAM_BOT_TOKEN   = 1234567:AAxx...      ← إجباري               ║
 # ║  TELEGRAM_ALLOWED_IDS = @yourusername        ← اختياري              ║
 # ║                                                                      ║
-# ║  ⚠️ مهم جداً لـ TELEGRAM_ALLOWED_IDS:                               ║
+# ║  ⚠️  مهم جداً لـ TELEGRAM_ALLOWED_IDS:                              ║
 # ║  استخدم @username (مش الـ numeric ID) — Bug #62                     ║
 # ║  مثال: @ahmed أو @ahmed,@sara لأكتر من شخص                         ║
 # ║  أو اتركه فاضي عشان تسمح للكل                                       ║
@@ -17,9 +17,13 @@
 
 # ═══════════════════════════════════════════════════════════════════════
 # Stage 1: Build من السورس الرسمي
-# go.mod يطلب Go 1.21+ ← نستخدم 1.21-alpine للاستقرار
+#
+# ⚠️  FIX: picoclaw go.mod اتحدث ويطلب Go >= 1.25.7
+#     golang:1.21 و golang:1.24 بيفشلوا بـ error:
+#     "go.mod requires go >= 1.25.7 (running go 1.21.13; GOTOOLCHAIN=local)"
+#     الحل: golang:1.26-alpine هو أحدث Go stable (نزل فبراير 2026)
 # ═══════════════════════════════════════════════════════════════════════
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # git لازم لـ make deps (go modules) + make لبناء المشروع
 RUN apk add --no-cache git make
@@ -141,12 +145,12 @@ if allowed_raw:
 #    الـ "providers" deprecated وفيه Bug #127 مع custom api_base
 #
 # 2. "model": "openai/moonshotai/kimi-k2-instruct"
-#    format: "vendor/model-name"
+#    format: "openai/model-name"
 #    picoclaw بيشيل "openai/" prefix قبل ما يبعت للـ API
 #    فـ NVIDIA NIM هيستقبل: "moonshotai/kimi-k2-instruct" ✓
 #
 # 3. "allowFrom" (camelCase) للـ Telegram
-#    مؤكد من: README الرسمي + picoclaw-labs + EMSI + مصادر متعددة
+#    مؤكد من: README الرسمي + picoclaw-labs + مصادر متعددة
 #
 # 4. workspace path: مطلق مش relative
 #    "~/.picoclaw/workspace" ممكن تفشل في بعض Docker contexts
