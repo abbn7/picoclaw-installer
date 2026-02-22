@@ -48,23 +48,21 @@ if not nvidia_key or not telegram_token:
     sys.exit(1)
 
 # ── بناء config.json ─────────────────────────────────────────────────
-# ✅ حل مشكلة 429 (Too Many Requests)
-# ✅ حل مشكلة الهوية (System Prompt)
-# ✅ حل مشكلة الأمان (Safety Guards)
-# ✅ حل مشكلة الـ API (JSON Schemas)
+# ✅ حل مشكلة 429 (Too Many Requests) - تقليل التكرار وزيادة الكفاءة
+# ✅ حل مشكلة Context Window - تقليل max_tokens وتحديد الذاكرة
+# ✅ حل مشكلة الأمان - تعطيل الـ Safety Guards بشكل صحيح
 config = {
     "agents": {
         "defaults": {
             "workspace": "/root/.picoclaw/workspace",
             "model": "kimi",
-            "max_tokens": 4096,
-            "temperature": 0.6,
-            "max_tool_iterations": 8,
+            "max_tokens": 2048,          # تقليل الحجم لتجنب تجاوز الذاكرة
+            "temperature": 0.5,          # تقليل العشوائية لتقليل طول الردود
+            "max_tool_iterations": 5,    # تقليل عدد المحاولات لمنع الـ 429
             "system_prompt": (
-                "أنت PicoClaw، مساعد ذكاء اصطناعي متطور يعمل بموديل Kimi-K2 (Moonshot AI) عبر NVIDIA NIM. "
-                "لديك صلاحيات كاملة (Root) على النظام لتنفيذ الأوامر والبحث والبرمجة. "
-                "أجب دائماً باللغة العربية بأسلوب احترافي ومفيد. "
-                "عندما يطلب المستخدم إحصائيات النظام، استخدم أدوات النظام المتاحة مثل top, free, df, uptime."
+                "أنت PicoClaw، مساعد ذكاء اصطناعي يعمل بموديل Kimi-K2. "
+                "لديك صلاحيات كاملة (Root). أجب باختصار شديد وبالعربية. "
+                "لا تكرر طلب الأدوات إذا فشلت، بل أخبر المستخدم بالمشكلة باختصار."
             )
         }
     },
@@ -87,11 +85,11 @@ config = {
         "shell": { 
             "enabled": True, 
             "allow_unsafe": True,
-            "safety_guards": False  # تعطيل قيود الأمان للسماح بـ /stats
+            "safety_guards": False 
         },
         "web": { "search": { "enabled": True }, "browse": { "enabled": True } },
         "file": { "enabled": True },
-        "cron": { "enabled": True, "exec_timeout_minutes": 10 }
+        "cron": { "enabled": True, "exec_timeout_minutes": 5 }
     },
     "heartbeat": { "enabled": False },
     "gateway": { "host": "0.0.0.0", "port": 18790 }
@@ -103,7 +101,7 @@ os.makedirs(os.path.dirname(config_path), exist_ok=True)
 with open(config_path, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 
-print("✅ تم تطبيق الإصلاحات الشاملة")
+print("✅ تم تطبيق الحلول النهائية (429 + Context Fix)")
 print("🚀 تشغيل PicoClaw Gateway...")
 sys.stdout.flush()
 
