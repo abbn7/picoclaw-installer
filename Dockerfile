@@ -48,7 +48,10 @@ if not nvidia_key or not telegram_token:
     sys.exit(1)
 
 # ── بناء config.json ─────────────────────────────────────────────────
-# ✅ حل مشكلة 429 (Too Many Requests) ومنح كافة الصلاحيات
+# ✅ حل مشكلة 429 (Too Many Requests)
+# ✅ حل مشكلة الهوية (System Prompt)
+# ✅ حل مشكلة الأمان (Safety Guards)
+# ✅ حل مشكلة الـ API (JSON Schemas)
 config = {
     "agents": {
         "defaults": {
@@ -56,8 +59,13 @@ config = {
             "model": "kimi",
             "max_tokens": 4096,
             "temperature": 0.6,
-            "max_tool_iterations": 10,
-            "system_prompt": "أنت مساعد ذكاء اصطناعي قوي جداً. لديك صلاحيات كاملة لتنفيذ الأوامر والبحث والبرمجة. أجب دائماً بالعربية."
+            "max_tool_iterations": 8,
+            "system_prompt": (
+                "أنت PicoClaw، مساعد ذكاء اصطناعي متطور يعمل بموديل Kimi-K2 (Moonshot AI) عبر NVIDIA NIM. "
+                "لديك صلاحيات كاملة (Root) على النظام لتنفيذ الأوامر والبحث والبرمجة. "
+                "أجب دائماً باللغة العربية بأسلوب احترافي ومفيد. "
+                "عندما يطلب المستخدم إحصائيات النظام، استخدم أدوات النظام المتاحة مثل top, free, df, uptime."
+            )
         }
     },
     "model_list": [
@@ -76,7 +84,11 @@ config = {
         }
     },
     "tools": {
-        "shell": { "enabled": True, "allow_unsafe": True },
+        "shell": { 
+            "enabled": True, 
+            "allow_unsafe": True,
+            "safety_guards": False  # تعطيل قيود الأمان للسماح بـ /stats
+        },
         "web": { "search": { "enabled": True }, "browse": { "enabled": True } },
         "file": { "enabled": True },
         "cron": { "enabled": True, "exec_timeout_minutes": 10 }
@@ -91,7 +103,7 @@ os.makedirs(os.path.dirname(config_path), exist_ok=True)
 with open(config_path, "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2, ensure_ascii=False)
 
-print("✅ Config جاهز مع كامل الصلاحيات")
+print("✅ تم تطبيق الإصلاحات الشاملة")
 print("🚀 تشغيل PicoClaw Gateway...")
 sys.stdout.flush()
 
