@@ -1,168 +1,262 @@
-# ═══════════════════════════════════════════════════════════════
-#  PicoClaw — Railway Dockerfile
-#  Model  : moonshotai/kimi-k2-instruct  (via NVIDIA NIM)
-#  Channel: Telegram
-#
-#  ✅ ملف واحد بس — ارفعه في repo وخده على Railway
-#
-#  🔑 Variables لازم تضيفهم في Railway → Variables:
-#     NVIDIA_KEY           = nvapi-xxxx...
-#     TELEGRAM_BOT_TOKEN   = 1234567890:AAx...
-#     TELEGRAM_ALLOWED_IDS = (اختياري) مثال: 123456789,987654321
-# ═══════════════════════════════════════════════════════════════
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║         PicoClaw — Railway Dockerfile  ✅ ملف واحد بس               ║
+# ║  Model  : moonshotai/kimi-k2-instruct  (NVIDIA NIM)                 ║
+# ║  Channel: Telegram                                                   ║
+# ╠══════════════════════════════════════════════════════════════════════╣
+# ║  🔑 أضف في Railway → Variables:                                     ║
+# ║                                                                      ║
+# ║  NVIDIA_KEY           = nvapi-xxxx...        ← إجباري               ║
+# ║  TELEGRAM_BOT_TOKEN   = 1234567:AAxx...      ← إجباري               ║
+# ║  TELEGRAM_ALLOWED_IDS = @yourusername        ← اختياري              ║
+# ║                                                                      ║
+# ║  ⚠️ مهم جداً لـ TELEGRAM_ALLOWED_IDS:                               ║
+# ║  استخدم @username (مش الـ numeric ID) — Bug #62                     ║
+# ║  مثال: @ahmed أو @ahmed,@sara لأكتر من شخص                         ║
+# ║  أو اتركه فاضي عشان تسمح للكل                                       ║
+# ╚══════════════════════════════════════════════════════════════════════╝
 
-FROM ubuntu:22.04
+# ═══════════════════════════════════════════════════════════════════════
+# Stage 1: Build من السورس الرسمي
+# go.mod يطلب Go 1.21+ ← نستخدم 1.21-alpine للاستقرار
+# ═══════════════════════════════════════════════════════════════════════
+FROM golang:1.21-alpine AS builder
 
-# ── تجنب أي أسئلة تفاعلية أثناء البناء ──
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
+# git لازم لـ make deps (go modules) + make لبناء المشروع
+RUN apk add --no-cache git make
 
-# ── تثبيت الأدوات الأساسية ──
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    curl \
+WORKDIR /src
+
+# Clone آخر نسخة وابني
+# make deps → go get -u ./... && go mod tidy
+# make build → بيطلع build/picoclaw-linux-amd64 + symlink build/picoclaw
+RUN git clone --depth=1 https://github.com/sipeed/picoclaw.git . \
+    && make deps \
+    && make build \
+    && echo "✅ Build output:" \
+    && ls -lh build/
+
+# ═══════════════════════════════════════════════════════════════════════
+# Stage 2: Runtime Image
+# python:3.12-alpine = python3 + alpine (خفيف + كافي)
+# ═══════════════════════════════════════════════════════════════════════
+FROM python:3.12-alpine
+
+RUN apk add --no-cache \
     ca-certificates \
-    jq \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    tzdata \
+    curl \
+    bash
 
-# ── تحميل PicoClaw Binary المناسب للـ Architecture ──
-RUN set -e; \
-    ARCH=$(uname -m); \
-    echo "🔍 Architecture detected: $ARCH"; \
-    case "$ARCH" in \
-        x86_64)  BINARY="picoclaw-linux-amd64"  ;; \
-        aarch64) BINARY="picoclaw-linux-arm64"  ;; \
-        armv7l)  BINARY="picoclaw-linux-arm-v7" ;; \
-        *) echo "❌ Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac; \
-    echo "📥 Downloading $BINARY ..."; \
-    wget -q --show-progress \
-        "https://github.com/sipeed/picoclaw/releases/latest/download/$BINARY" \
-        -O /usr/local/bin/picoclaw; \
-    chmod +x /usr/local/bin/picoclaw; \
-    echo "✅ PicoClaw downloaded successfully"
+# ── نسخ الـ binary مباشرة (مش الـ symlink عشان ممكن ميتنسخش صح) ──
+COPY --from=builder /src/build/picoclaw-linux-amd64 /usr/local/bin/picoclaw
+RUN chmod +x /usr/local/bin/picoclaw
 
-# ── إنشاء المجلدات المطلوبة ──
-RUN mkdir -p /root/.picoclaw/workspace/sessions \
-             /root/.picoclaw/workspace/memory \
-             /root/.picoclaw/workspace/cron \
-             /root/.picoclaw/workspace/skills
+# ── تشغيل onboard عشان ينشئ الـ workspace structure الرسمي ──
+# ينشئ: ~/.picoclaw/config.json + workspace/sessions,memory,cron,skills
+# + ملفات: AGENTS.md, IDENTITY.md, SOUL.md, TOOLS.md, USER.md
+# ملاحظة: الـ config.json اللي بتنشئه onboard هيتكتب فوقه Python script
+RUN /usr/local/bin/picoclaw onboard \
+    && echo "✅ Workspace created:" \
+    && ls /root/.picoclaw/ \
+    && ls /root/.picoclaw/workspace/
 
-# ── الـ Entrypoint Script — يعمل Config من الـ Variables وقت التشغيل ──
-# (الـ Variables مش متاحة وقت البناء، بس متاحة وقت التشغيل في Railway)
-RUN cat > /entrypoint.sh << 'ENTRYPOINT_EOF'
-#!/bin/bash
-set -e
+# ═══════════════════════════════════════════════════════════════════════
+# Python Startup Script
+# بيشتغل وقت تشغيل الـ container (مش وقت البناء)
+# عشان يقرأ الـ Railway Variables اللي مش متاحة وقت البناء
+# ═══════════════════════════════════════════════════════════════════════
+RUN cat > /start.py << 'PYEOF'
+#!/usr/bin/env python3
+"""
+PicoClaw Startup Script — NVIDIA NIM + Telegram
+=================================================
+1. يتحقق من Railway Variables
+2. يبني config.json الصح
+3. يشغل picoclaw gateway
+"""
+import os, json, sys
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+# ── Banner ──────────────────────────────────────────────────────────
+print()
+print("╔══════════════════════════════════════════════════╗")
+print("║   🤖  PicoClaw — Kimi-K2 via NVIDIA NIM         ║")
+print("║   💬  Channel: Telegram                         ║")
+print("╚══════════════════════════════════════════════════╝")
+print()
 
-echo ""
-echo -e "${GREEN}══════════════════════════════════════════${NC}"
-echo -e "${GREEN}   🤖 PicoClaw — Kimi-K2 via NVIDIA NIM   ${NC}"
-echo -e "${GREEN}══════════════════════════════════════════${NC}"
-echo ""
+# ── قراءة الـ Railway Variables ─────────────────────────────────────
+nvidia_key     = os.environ.get("NVIDIA_KEY", "").strip()
+telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+allowed_raw    = os.environ.get("TELEGRAM_ALLOWED_IDS", "").strip()
 
-# ── التحقق من الـ Variables الإجبارية ──
-MISSING=0
+# ── التحقق من الإجباريات ────────────────────────────────────────────
+missing = []
+if not nvidia_key:
+    missing.append("NVIDIA_KEY")
+if not telegram_token:
+    missing.append("TELEGRAM_BOT_TOKEN")
 
-if [ -z "$NVIDIA_KEY" ]; then
-    echo -e "${RED}❌ NVIDIA_KEY غير موجود في Railway Variables!${NC}"
-    MISSING=1
-fi
+if missing:
+    print("❌ خطأ: Variables ناقصة في Railway → Variables:")
+    for v in missing:
+        print(f"   ✗ {v}")
+    print()
+    print("📌 الخطوات:")
+    print("   1. افتح الـ project في Railway")
+    print("   2. Variables → New Variable")
+    print("   3. أضف المتغيرين المذكورين")
+    print()
+    sys.exit(1)
 
-if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-    echo -e "${RED}❌ TELEGRAM_BOT_TOKEN غير موجود في Railway Variables!${NC}"
-    MISSING=1
-fi
+# ── معالجة TELEGRAM_ALLOWED_IDS ─────────────────────────────────────
+# ⚠️ BUG #62 في picoclaw:
+#    الـ numeric IDs مش بتشتغل لو عندك Telegram username
+#    السبب: picoclaw بيبني الـ senderID كـ "123456789|myusername"
+#    وبعدين بيعمل exact match — فـ "123456789" مش هيـ match
+#
+# الحل:
+#    استخدم @username بدل الـ numeric ID في TELEGRAM_ALLOWED_IDS
+#    مثال: @ahmed أو @ahmed,@sara
+#    أو اتركه فاضي عشان تسمح للكل
+#
+# تنبيه تلقائي لو حد حط numeric ID
+allow_from = []
+if allowed_raw:
+    raw_ids = [x.strip() for x in allowed_raw.split(",") if x.strip()]
+    numeric_ids = [x for x in raw_ids if x.isdigit()]
+    if numeric_ids:
+        print("⚠️  تحذير: لقيت Numeric IDs في TELEGRAM_ALLOWED_IDS:")
+        for nid in numeric_ids:
+            print(f"   - '{nid}' قد لا تشتغل (Bug #62)")
+        print("   💡 الحل: استخدم @username بدلاً من الـ numeric ID")
+        print("      أو اتركه فاضي عشان تسمح للكل")
+        print()
+    allow_from = raw_ids
 
-if [ "$MISSING" -eq 1 ]; then
-    echo ""
-    echo -e "${YELLOW}📌 عشان تضيف الـ Variables في Railway:${NC}"
-    echo "   1. افتح الـ Project في Railway"
-    echo "   2. روح Variables"
-    echo "   3. أضف: NVIDIA_KEY و TELEGRAM_BOT_TOKEN"
-    echo ""
-    exit 1
-fi
-
-# ── بناء الـ allow_from list ──
-# لو TELEGRAM_ALLOWED_IDS فيه قيم، حولها لـ JSON array
-# لو فاضية، سيبها array فاضية (يسمح لكل الناس)
-if [ -n "$TELEGRAM_ALLOWED_IDS" ]; then
-    # حول "123,456,789" لـ ["123","456","789"]
-    ALLOW_FROM_JSON=$(echo "$TELEGRAM_ALLOWED_IDS" | tr ',' '\n' | \
-        jq -R . | jq -s .)
-else
-    ALLOW_FROM_JSON="[]"
-fi
-
-echo "⚙️  جاري إنشاء الـ Config..."
-
-# ── إنشاء config.json ──
-cat > /root/.picoclaw/config.json << CONFIG_EOF
-{
-  "agents": {
-    "defaults": {
-      "workspace": "/root/.picoclaw/workspace",
-      "model": "kimi",
-      "max_tokens": 8192,
-      "temperature": 0.7,
-      "max_tool_iterations": 20
+# ── بناء config.json ─────────────────────────────────────────────────
+#
+# ✅ قرارات مبنية على source code + Issues الرسمية:
+#
+# 1. model_list (الـ format الجديد الموصى به)
+#    الـ "providers" deprecated وفيه Bug #127 مع custom api_base
+#
+# 2. "model": "openai/moonshotai/kimi-k2-instruct"
+#    format: "vendor/model-name"
+#    picoclaw بيشيل "openai/" prefix قبل ما يبعت للـ API
+#    فـ NVIDIA NIM هيستقبل: "moonshotai/kimi-k2-instruct" ✓
+#
+# 3. "allowFrom" (camelCase) للـ Telegram
+#    مؤكد من: README الرسمي + picoclaw-labs + EMSI + مصادر متعددة
+#
+# 4. workspace path: مطلق مش relative
+#    "~/.picoclaw/workspace" ممكن تفشل في بعض Docker contexts
+#    "/root/.picoclaw/workspace" مضمونة دايماً
+#
+# 5. gateway.host = "0.0.0.0"
+#    بدونه Railway مش هيقدر يوصل للـ healthcheck
+#    مؤكد من Issue #127 config
+#
+config = {
+    "agents": {
+        "defaults": {
+            "workspace": "/root/.picoclaw/workspace",
+            "model": "kimi",
+            "max_tokens": 8192,
+            "temperature": 0.7,
+            "max_tool_iterations": 20
+        }
+    },
+    "model_list": [
+        {
+            "model_name": "kimi",
+            "model": "openai/moonshotai/kimi-k2-instruct",
+            "api_base": "https://integrate.api.nvidia.com/v1",
+            "api_key": nvidia_key
+        }
+    ],
+    "channels": {
+        "telegram": {
+            "enabled": True,
+            "token": telegram_token,
+            "allowFrom": allow_from
+        }
+    },
+    "tools": {
+        "web": {
+            "search": {
+                "enabled": False
+            }
+        },
+        "cron": {
+            "exec_timeout_minutes": 5
+        }
+    },
+    "heartbeat": {
+        "enabled": False
+    },
+    "gateway": {
+        "host": "0.0.0.0",
+        "port": 18790
     }
-  },
-  "model_list": [
-    {
-      "model_name": "kimi",
-      "model": "openai/moonshotai/kimi-k2-instruct",
-      "api_base": "https://integrate.api.nvidia.com/v1",
-      "api_key": "${NVIDIA_KEY}"
-    }
-  ],
-  "channels": {
-    "telegram": {
-      "enabled": true,
-      "token": "${TELEGRAM_BOT_TOKEN}",
-      "allow_from": ${ALLOW_FROM_JSON}
-    }
-  },
-  "tools": {
-    "web": {
-      "duckduckgo": {
-        "enabled": true,
-        "max_results": 5
-      }
-    }
-  }
 }
-CONFIG_EOF
 
-echo -e "${GREEN}✅ Config جاهز${NC}"
-echo ""
-echo "📊 إعدادات البوت:"
-echo "   🤖 Model   : moonshotai/kimi-k2-instruct (NVIDIA NIM)"
-echo "   💬 Channel : Telegram"
-echo "   👥 Allow   : ${TELEGRAM_ALLOWED_IDS:-الكل (مفيش قيود)}"
-echo ""
-echo -e "${GREEN}🚀 تشغيل PicoClaw Gateway...${NC}"
-echo "══════════════════════════════════════════"
-echo ""
+# ── كتابة الـ config فوق الـ default اللي عملته onboard ─────────────
+config_path = "/root/.picoclaw/config.json"
+os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
-# ── تشغيل البوت ──
-exec /usr/local/bin/picoclaw gateway
+with open(config_path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
 
-ENTRYPOINT_EOF
+# ── تأكيد نهائي ────────────────────────────────────────────────────
+print("✅ Config جاهز")
+print()
+print("📊 إعدادات البوت:")
+print(f"   🤖 Model    : moonshotai/kimi-k2-instruct")
+print(f"   🔌 API      : NVIDIA NIM")
+print(f"   🌐 Endpoint : https://integrate.api.nvidia.com/v1")
+print(f"   💬 Channel  : Telegram")
+print(f"   👥 Allowed  : {', '.join(allow_from) if allow_from else 'الكل (allow all)'}")
+print(f"   🏠 Gateway  : 0.0.0.0:18790")
+print(f"   📁 Workspace: /root/.picoclaw/workspace")
+print()
 
-RUN chmod +x /entrypoint.sh
+# ── فحص الـ binary ──────────────────────────────────────────────────
+import subprocess
+try:
+    r = subprocess.run(
+        ["/usr/local/bin/picoclaw", "version"],
+        capture_output=True, text=True, timeout=5
+    )
+    version = (r.stdout + r.stderr).strip()
+    if version:
+        print(f"   📦 Version  : {version}")
+        print()
+except Exception:
+    pass
 
-# ── Railway بيشتغل بـ non-root user أحياناً — نضمن الصلاحيات ──
-RUN chmod -R 755 /root/.picoclaw
+print("🚀 تشغيل PicoClaw Gateway...")
+print("══════════════════════════════════════════════════")
+print()
+sys.stdout.flush()
 
-# ── الـ Port (مش مطلوب لبوت Telegram بس Railway بيتوقعه) ──
-EXPOSE 8080
+# ── تشغيل البوت ──────────────────────────────────────────────────────
+# os.execv يحل محل الـ Python process (أكفأ من subprocess)
+# البوت هيشتغل ويفضل شغال حتى لو Railway عمل restart
+os.execv("/usr/local/bin/picoclaw", ["/usr/local/bin/picoclaw", "gateway"])
+PYEOF
 
-# ── نقطة الدخول ──
-ENTRYPOINT ["/entrypoint.sh"]
+RUN chmod +x /start.py
+
+# ── HealthCheck ───────────────────────────────────────────────────────
+# /health endpoint رسمي في picoclaw (PR #104)
+# Railway بيستخدمه عشان يعرف الـ container شغال
+HEALTHCHECK \
+    --interval=30s \
+    --timeout=10s \
+    --start-period=30s \
+    --retries=3 \
+    CMD wget -qO- http://localhost:18790/health 2>/dev/null || exit 1
+
+EXPOSE 18790
+
+ENTRYPOINT ["python3", "/start.py"]
